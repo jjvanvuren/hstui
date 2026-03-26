@@ -4,15 +4,25 @@ TUI application for controlling a SteelSeries Arctis Nova 7 headset.
 Uses headsetcontrol CLI tool for communication with the device.
 Built with urwid for native terminal background rendering.
 """
+
 import json
 import subprocess
+from collections.abc import Hashable
 
 import urwid
 
 # Equaliser band centre frequencies (Hz) for the 10-band EQ
 EQ_BAND_LABELS = [
-    '32', '64', '125', '250', '500',
-    '1k', '2k', '4k', '8k', '16k',
+    '32',
+    '64',
+    '125',
+    '250',
+    '500',
+    '1k',
+    '2k',
+    '4k',
+    '8k',
+    '16k',
 ]
 
 EQ_PRESETS = {
@@ -30,7 +40,7 @@ EQ_PRESET_VALUES = {
 }
 
 BATTERY_ICONS = {
-    (0, 10): '\U000f007a',   # 󰁺
+    (0, 10): '\U000f007a',  # 󰁺
     (10, 20): '\U000f007b',  # 󰁻
     (20, 30): '\U000f007c',  # 󰁼
     (30, 40): '\U000f007d',  # 󰁽
@@ -39,7 +49,7 @@ BATTERY_ICONS = {
     (60, 70): '\U000f0080',  # 󰂀
     (70, 80): '\U000f0081',  # 󰂁
     (80, 90): '\U000f0082',  # 󰂂
-    (90, 101): '\U000f0079', # 󰁹
+    (90, 101): '\U000f0079',  # 󰁹
 }
 
 PALETTE = [
@@ -128,12 +138,12 @@ def read_device_state():
     return None
 
 
-def make_bar(value, max_val, width=20):
+def make_bar(value, max_val, width=20) -> list[str | tuple[Hashable, str]]:
     """
     Create a text-based progress bar using block characters.
     """
     if max_val <= 0:
-        return ('bar_empty', '\u2591' * width)
+        return [('bar_empty', '\u2591' * width)]
     filled = int(round(value / max_val * width))
     filled = max(0, min(filled, width))
     empty = width - filled
@@ -183,8 +193,9 @@ class NumericControl(BaseControl):
 
     signals = ['changed']
 
-    def __init__(self, label, min_val, max_val, step, initial, control_id,
-                 display_fmt=None):
+    def __init__(
+        self, label, min_val, max_val, step, initial, control_id, display_fmt=None
+    ):
         self.label_text = label
         self.min_val = min_val
         self.max_val = max_val
@@ -195,15 +206,20 @@ class NumericControl(BaseControl):
         self._user_set = False
         self._indicator = urwid.Text(('dim', ' '))
         self._label_w = urwid.Text(('dim', self.label_text))
-        self._value_w = urwid.Text(('dim', self._display_fmt(self.value)), align='right')
+        self._value_w = urwid.Text(
+            ('dim', self._display_fmt(self.value)), align='right'
+        )
         self._bar_w = urwid.Text(make_bar(self.value, self.max_val))
-        cols = urwid.Columns([
-            ('fixed', 2, self._indicator),
-            ('fixed', 28, self._label_w),
-            ('fixed', 6, self._value_w),
-            ('fixed', 1, urwid.Text(' ')),
-            ('fixed', 20, self._bar_w),
-        ], dividechars=0)
+        cols = urwid.Columns(
+            [
+                (urwid.GIVEN, 2, self._indicator),
+                (urwid.GIVEN, 28, self._label_w),
+                (urwid.GIVEN, 6, self._value_w),
+                (urwid.GIVEN, 1, urwid.Text(' ')),
+                (urwid.GIVEN, 20, self._bar_w),
+            ],
+            dividechars=0,
+        )
         super().__init__(cols)
 
     def _update_display(self):
@@ -254,13 +270,16 @@ class EqBandControl(BaseControl):
         self._freq_w = urwid.Text(('dim', f'{label:>4}'))
         self._val_w = urwid.Text(('value', f'{self.band_value:+.1f}'), align='right')
         self._bar_w = urwid.Text(make_bar(self.band_value + 10.0, 20.0, width=16))
-        cols = urwid.Columns([
-            ('fixed', 2, self._indicator),
-            ('fixed', 5, self._freq_w),
-            ('fixed', 6, self._val_w),
-            ('fixed', 1, urwid.Text(' ')),
-            ('fixed', 16, self._bar_w),
-        ], dividechars=0)
+        cols = urwid.Columns(
+            [
+                (urwid.GIVEN, 2, self._indicator),
+                (urwid.GIVEN, 5, self._freq_w),
+                (urwid.GIVEN, 6, self._val_w),
+                (urwid.GIVEN, 1, urwid.Text(' ')),
+                (urwid.GIVEN, 16, self._bar_w),
+            ],
+            dividechars=0,
+        )
         super().__init__(cols)
 
     def _update_display(self):
@@ -313,12 +332,15 @@ class OptionControl(BaseControl):
         self._indicator = urwid.Text(('dim', '  '))
         self._label_w = urwid.Text(('dim', label))
         self._options_w = urwid.Text(self._options_markup())
-        cols = urwid.Columns([
-            ('fixed', 2, self._indicator),
-            ('fixed', 28, self._label_w),
-            ('fixed', 7, urwid.Text('')),
-            ('pack', self._options_w),
-        ], dividechars=0)
+        cols = urwid.Columns(
+            [
+                (urwid.GIVEN, 2, self._indicator),
+                (urwid.GIVEN, 28, self._label_w),
+                (urwid.GIVEN, 7, urwid.Text('')),
+                (urwid.PACK, self._options_w),
+            ],
+            dividechars=0,
+        )
         super().__init__(cols)
 
     def _options_markup(self):
@@ -374,12 +396,15 @@ class ToggleControl(BaseControl):
         self._indicator = urwid.Text(('dim', '  '))
         self._label_w = urwid.Text(('dim', label))
         self._toggle_w = urwid.Text(self._toggle_markup())
-        cols = urwid.Columns([
-            ('fixed', 2, self._indicator),
-            ('fixed', 28, self._label_w),
-            ('fixed', 7, urwid.Text('')),
-            ('fixed', 5, self._toggle_w),
-        ], dividechars=0)
+        cols = urwid.Columns(
+            [
+                (urwid.GIVEN, 2, self._indicator),
+                (urwid.GIVEN, 28, self._label_w),
+                (urwid.GIVEN, 7, urwid.Text('')),
+                (urwid.GIVEN, 5, self._toggle_w),
+            ],
+            dividechars=0,
+        )
         super().__init__(cols)
 
     def _toggle_markup(self):
@@ -421,14 +446,17 @@ class PresetSelector(BaseControl):
         self.current = initial
         self._indicator = urwid.Text(('dim', '  '))
         self._text_w = urwid.Text(self._markup())
-        cols = urwid.Columns([
-            ('fixed', 2, self._indicator),
-            ('pack', self._text_w),
-        ], dividechars=0)
+        cols = urwid.Columns(
+            [
+                (urwid.GIVEN, 2, self._indicator),
+                (urwid.PACK, self._text_w),
+            ],
+            dividechars=0,
+        )
         super().__init__(cols)
 
-    def _markup(self):
-        parts = [('default', 'Preset: ')]
+    def _markup(self) -> list[str | tuple[Hashable, str]]:
+        parts: list[str | tuple[Hashable, str]] = [('default', 'Preset: ')]
         for idx, name in EQ_PRESETS.items():
             if idx == self.current:
                 parts.append(('accent_bold', f'[{name}]'))
@@ -478,10 +506,13 @@ class ApplyButton(BaseControl):
     def __init__(self, label):
         self._indicator = urwid.Text(('dim', '  '))
         self._text_w = urwid.Text(('accent', f'[ {label} ]'))
-        cols = urwid.Columns([
-            ('fixed', 2, self._indicator),
-            ('pack', self._text_w),
-        ], dividechars=0)
+        cols = urwid.Columns(
+            [
+                (urwid.GIVEN, 2, self._indicator),
+                (urwid.PACK, self._text_w),
+            ],
+            dividechars=0,
+        )
         super().__init__(cols)
 
     def keypress(self, size, key):
@@ -522,20 +553,30 @@ class HeadsetTUI:
         self._status_battery = urwid.Text(('default', 'Battery: --'))
         self._status_chatmix = urwid.Text(('default', 'Chatmix: --'))
         self._status_disconnected = urwid.Text(('disconnected', ''))
-        status_bar = urwid.Columns([
-            ('pack', self._status_device),
-            ('fixed', 2, urwid.Text('')),
-            ('pack', self._status_battery),
-            ('fixed', 2, urwid.Text('')),
-            ('pack', self._status_chatmix),
-            ('fixed', 2, urwid.Text('')),
-            ('pack', self._status_disconnected),
-        ])
+        status_bar = urwid.Columns(
+            [
+                (urwid.PACK, self._status_device),
+                (urwid.GIVEN, 2, urwid.Text('')),
+                (urwid.PACK, self._status_battery),
+                (urwid.GIVEN, 2, urwid.Text('')),
+                (urwid.PACK, self._status_chatmix),
+                (urwid.GIVEN, 2, urwid.Text('')),
+                (urwid.PACK, self._status_disconnected),
+            ]
+        )
 
         # Audio controls
-        pct128 = lambda v: f'{round(v / 128 * 100)}%'
+        def pct128(v):
+            return f'{round(v / 128 * 100)}%'
+
         self._sidetone = NumericControl(
-            'Sidetone', 0, 128, 8, 0, 'sidetone', display_fmt=pct128,
+            'Sidetone',
+            0,
+            128,
+            8,
+            0,
+            'sidetone',
+            display_fmt=pct128,
         )
         urwid.connect_signal(self._sidetone, 'changed', self._on_control_changed)
 
@@ -553,30 +594,47 @@ class HeadsetTUI:
 
         # Microphone controls
         self._mic_vol = NumericControl(
-            'Volume', 0, 128, 8, 128, 'mic-vol', display_fmt=pct128,
+            'Volume',
+            0,
+            128,
+            8,
+            128,
+            'mic-vol',
+            display_fmt=pct128,
         )
         self._mic_led = OptionControl(
             'Mute LED Brightness',
             [(0, 'Off'), (1, 'Low'), (2, 'Med'), (3, 'High')],
-            initial=3, control_id='mic-led',
+            initial=3,
+            control_id='mic-led',
         )
         urwid.connect_signal(self._mic_vol, 'changed', self._on_control_changed)
         urwid.connect_signal(self._mic_led, 'changed', self._on_control_changed)
 
         # Settings controls
         self._inactive = NumericControl(
-            'Inactive Time (min)', 0, 90, 5, 30, 'inactive',
+            'Inactive Time (min)',
+            0,
+            90,
+            5,
+            30,
+            'inactive',
         )
         self._bt_call_vol = OptionControl(
             'BT Call Ducking',
             [(0, 'Off'), (1, 'Medium'), (2, 'Max')],
-            initial=0, control_id='bt-call-vol',
+            initial=0,
+            control_id='bt-call-vol',
         )
         self._vol_limiter = ToggleControl(
-            'Volume Limiter', initial=True, control_id='volume-limiter',
+            'Volume Limiter',
+            initial=True,
+            control_id='volume-limiter',
         )
         self._bt_powered = ToggleControl(
-            'BT When Powered On', initial=False, control_id='bt-powered-on',
+            'BT When Powered On',
+            initial=False,
+            control_id='bt-powered-on',
         )
         urwid.connect_signal(self._inactive, 'changed', self._on_control_changed)
         urwid.connect_signal(self._bt_call_vol, 'changed', self._on_control_changed)
@@ -587,14 +645,22 @@ class HeadsetTUI:
         self._feedback = urwid.Text(('feedback', ''))
 
         # Help line
-        help_text = urwid.Text([
-            ('heading', 'q'), ('default', ' Quit | '),
-            ('heading', 'j/k/↑/↓'), ('default', ' Navigate | '),
-            ('heading', 'h/l/←/→'), ('default', ' Adjust | '),
-            ('heading', 'e'), ('default', ' Equaliser | '),
-            ('heading', '1-4'), ('default', ' Preset | '),
-            ('heading', 'a'), ('default', ' Apply EQ'),
-        ])
+        help_text = urwid.Text(
+            [
+                ('heading', 'q'),
+                ('default', ' Quit | '),
+                ('heading', 'j/k/↑/↓'),
+                ('default', ' Navigate | '),
+                ('heading', 'h/l/←/→'),
+                ('default', ' Adjust | '),
+                ('heading', 'e'),
+                ('default', ' Equaliser | '),
+                ('heading', '1-4'),
+                ('default', ' Preset | '),
+                ('heading', 'a'),
+                ('default', ' Apply EQ'),
+            ]
+        )
 
         # Build flat list: section headers (non-selectable) + controls (selectable)
         def section_header(title):
@@ -610,7 +676,9 @@ class HeadsetTUI:
 
         D = urwid.Divider
         self._build_body_items = lambda: [
-            urwid.Text(('dim', 'Settings below cannot be read from device — defaults shown')),
+            urwid.Text(
+                ('dim', 'Settings below cannot be read from device — defaults shown')
+            ),
             D(),
             self._sidetone,
             D(),
@@ -773,7 +841,7 @@ class HeadsetTUI:
             self._eq_header.set_text(('heading', '── Equaliser [e to collapse] ──'))
         eq_start = self._walker.index(self._eq_header) + 1
         if self._eq_collapsed:
-            del self._walker[eq_start:eq_start + len(self._eq_widgets)]
+            del self._walker[eq_start : eq_start + len(self._eq_widgets)]
         else:
             for i, w in enumerate(self._eq_widgets):
                 self._walker.insert(eq_start + i, w)

@@ -9,3 +9,6 @@ dependencies = [
 
 [project.scripts]
 hstui = "hstui:main"
+
+[tool.ruff.format]
+quote-style = "single"
