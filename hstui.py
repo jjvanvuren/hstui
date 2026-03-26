@@ -43,6 +43,26 @@ EQ_PRESET_VALUES = {
     3: [3.0, 3.5, 1.5, -1.5, -4.0, -4.0, -2.5, 1.5, 3.0, 4.0],
 }
 
+# Device-specific software presets (sent via -e, not -p)
+DEVICE_EQ_PRESETS: dict[str, dict[int, str]] = {
+    '0x12ad': {  # Arctis Nova 7
+        4: 'Rtings',
+    },
+    '0x12e0': {  # Arctis Nova Pro Wireless
+        4: 'oratory1990',
+        5: 'Rtings',
+    },
+}
+DEVICE_EQ_PRESET_VALUES: dict[str, dict[int, list[float]]] = {
+    '0x12ad': {
+        4: [-2.6, -1.3, -6.1, 3.1, 3.4, -0.6, 1.1, 3.4, -8.7, -2.4],
+    },
+    '0x12e0': {
+        4: [2.9, 0.9, -5.3, -1.2, 2.4, -1.2, 0.7, 2.2, 0.1, -0.2],
+        5: [0.5, 2.3, -3.8, 1.4, 4.0, -1.8, -1.7, 5.7, -6.9, -7.0],
+    },
+}
+
 BATTERY_ICONS = {
     (0, 10): '\U000f007a',  # 󰁺
     (10, 20): '\U000f007b',  # 󰁻
@@ -469,12 +489,14 @@ class ToggleControl(BaseControl):
 
 class PresetSelector(BaseControl):
     """
-    EQ preset selector supporting 1-4 number keys and h/l cycling.
+    EQ preset selector supporting number keys and h/l cycling.
     """
 
     signals = ['changed']
 
-    def __init__(self, initial=0):
+    def __init__(self, presets: dict[int, str], initial: int = 0):
+        self._presets = presets
+        self._sorted_keys = sorted(presets.keys())
         self.current = initial
         self._indicator = urwid.Text(('dim', '  '))
         self._text_w = urwid.Text(self._markup())
@@ -489,7 +511,8 @@ class PresetSelector(BaseControl):
 
     def _markup(self) -> list[str | tuple[Hashable, str]]:
         parts: list[str | tuple[Hashable, str]] = [('default', 'Preset: ')]
-        for idx, name in EQ_PRESETS.items():
+        for idx in self._sorted_keys:
+            name = self._presets[idx]
             if idx == self.current:
                 parts.append(('accent_bold', f'[{name}]'))
             else:
@@ -507,7 +530,7 @@ class PresetSelector(BaseControl):
         """
         Select a preset by number.
         """
-        if preset_num in EQ_PRESETS:
+        if preset_num in self._presets:
             self.current = preset_num
             self._update_display()
             urwid.emit_signal(self, 'changed', preset_num)
@@ -517,12 +540,16 @@ class PresetSelector(BaseControl):
         Handle left/right cycling and number key selection.
         """
         if key in ('right', 'l'):
-            self.select((self.current + 1) % len(EQ_PRESETS))
+            cur_idx = self._sorted_keys.index(self.current)
+            next_idx = (cur_idx + 1) % len(self._sorted_keys)
+            self.select(self._sorted_keys[next_idx])
             return None
         if key in ('left', 'h'):
-            self.select((self.current - 1) % len(EQ_PRESETS))
+            cur_idx = self._sorted_keys.index(self.current)
+            prev_idx = (cur_idx - 1) % len(self._sorted_keys)
+            self.select(self._sorted_keys[prev_idx])
             return None
-        if key in ('1', '2', '3', '4'):
+        if key.isdigit() and 1 <= int(key) <= len(self._presets):
             self.select(int(key) - 1)
             return None
         return key
@@ -654,8 +681,16 @@ class HeadsetTUI:
         self._preset_selector = None
         self._eq_bands = []
         self._apply_btn = None
+        self._all_presets: dict[int, str] = {}
+        self._all_preset_values: dict[int, list[float]] = {}
         if self._has_eq:
-            self._preset_selector = PresetSelector(initial=0)
+            self._all_presets = dict(EQ_PRESETS)
+            self._all_preset_values = dict(EQ_PRESET_VALUES)
+            device_presets = DEVICE_EQ_PRESETS.get(self._product_id, {})
+            device_values = DEVICE_EQ_PRESET_VALUES.get(self._product_id, {})
+            self._all_presets.update(device_presets)
+            self._all_preset_values.update(device_values)
+            self._preset_selector = PresetSelector(presets=self._all_presets, initial=0)
             urwid.connect_signal(
                 self._preset_selector, 'changed', self._on_preset_changed
             )
@@ -743,12 +778,13 @@ class HeadsetTUI:
             ('default', ' Adjust'),
         ]
         if self._has_eq:
+            preset_count = len(self._all_presets)
             help_parts.extend(
                 [
                     ('default', ' | '),
                     ('heading', 'e'),
                     ('default', ' Equaliser | '),
-                    ('heading', '1-4'),
+                    ('heading', f'1-{preset_count}'),
                     ('default', ' Preset | '),
                     ('heading', 'a'),
                     ('default', ' Apply EQ'),
@@ -843,13 +879,24 @@ class HeadsetTUI:
     def _on_preset_changed(self, preset_num):
         """
         Handle EQ preset selection.
+
+        Hardware presets (0-3) are sent via -p. Software presets (4+) are
+        sent via -e with comma-separated band values.
         """
-        self._apply_setting(
-            ['-p', str(preset_num)],
-            f'EQ preset = {EQ_PRESETS.get(preset_num, preset_num)}',
-        )
-        if preset_num in EQ_PRESET_VALUES:
-            values = EQ_PRESET_VALUES[preset_num]
+        preset_name = self._all_presets.get(preset_num, str(preset_num))
+        if preset_num in EQ_PRESETS:
+            # Hardware preset — send via -p
+            self._apply_setting(
+                ['-p', str(preset_num)],
+                f'EQ preset = {preset_name}',
+            )
+        elif preset_num in self._all_preset_values:
+            # Software preset — send via -e
+            values = self._all_preset_values[preset_num]
+            eq_str = ','.join(str(v) for v in values)
+            self._apply_setting(['-e', eq_str], f'EQ preset = {preset_name}')
+        if preset_num in self._all_preset_values:
+            values = self._all_preset_values[preset_num]
             for band in self._eq_bands:
                 band.set_value(values[band.band_index])
 
@@ -932,7 +979,11 @@ class HeadsetTUI:
             if key == 'a':
                 self._on_apply_eq()
                 return True
-            if key in ('1', '2', '3', '4') and self._preset_selector is not None:
+            if (
+                key.isdigit()
+                and 1 <= int(key) <= len(self._all_presets)
+                and self._preset_selector is not None
+            ):
                 self._preset_selector.select(int(key) - 1)
                 return True
         return False

@@ -14,7 +14,7 @@ The TUI detects the connected device at startup and only shows controls it suppo
 ## Features
 
 - Sidetone control (numeric slider or stepped, depending on device)
-- 10-band equaliser with presets (Flat, Bass, Focus, Smiley)
+- 10-band equaliser with hardware presets (Flat, Bass, Focus, Smiley) and some device-specific custom presets from [AutoEq](https://autoeq.app/)
 - Lights toggle (Nova Pro Wireless)
 - Microphone volume and mute LED brightness (Nova 7)
 - Inactive timeout, volume limiter (Nova 7)
@@ -50,7 +50,7 @@ hstui
 |---|---|
 | `j`/`k`/`↑`/`↓` | Navigate between controls |
 | `h`/`l`/`←`/`→` | Adjust values |
-| `1`-`4` | Select EQ preset |
+| `1`-`N` | Select EQ preset (count varies by device) |
 | `a` | Apply custom EQ |
 | `e` | Toggle equaliser section |
 | `enter`/`space` | Toggle switches |
