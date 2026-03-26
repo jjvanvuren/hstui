@@ -1,5 +1,9 @@
 """
-TUI application for controlling a SteelSeries Arctis Nova 7 headset.
+TUI application for controlling SteelSeries headsets.
+
+Supported devices:
+- Arctis Nova 7 (0x12ad)
+- Arctis Nova Pro Wireless (0x12e0)
 
 Uses headsetcontrol CLI tool for communication with the device.
 Built with urwid for native terminal background rendering.
@@ -119,13 +123,17 @@ def run_headsetcontrol(*args):
         return False, str(exc)
 
 
-def read_device_state():
+def read_device_state(has_chatmix=False):
     """
     Query headsetcontrol for the current device state.
 
     Returns the first device dict from JSON output, or None on failure.
+    When has_chatmix is True, the -m flag is included to query chatmix.
     """
-    ok, output = run_headsetcontrol('-o', 'json', '-b', '-m')
+    args = ['-o', 'json', '-b']
+    if has_chatmix:
+        args.append('-m')
+    ok, output = run_headsetcontrol(*args)
     if not ok:
         return None
     try:
@@ -136,6 +144,30 @@ def read_device_state():
     except json.JSONDecodeError:
         pass
     return None
+
+
+def detect_device():
+    """
+    Detect the connected headset and its capabilities.
+
+    Returns a tuple of (device_name, product_id, capabilities_set).
+    On failure, returns ('Unknown', '', set()).
+    """
+    ok, output = run_headsetcontrol('-o', 'json')
+    if not ok:
+        return 'Unknown', '', set()
+    try:
+        data = json.loads(output)
+        devices = data.get('devices', [])
+        if devices and devices[0].get('status') == 'success':
+            device = devices[0]
+            name = device.get('product', 'Unknown')
+            product_id = device.get('id_product', '')
+            caps = set(device.get('capabilities', []))
+            return name, product_id, caps
+    except json.JSONDecodeError:
+        pass
+    return 'Unknown', '', set()
 
 
 def make_bar(value, max_val, width=20) -> list[str | tuple[Hashable, str]]:
@@ -533,12 +565,22 @@ urwid.register_signal(ApplyButton, ['click'])
 
 class HeadsetTUI:
     """
-    TUI for controlling a SteelSeries Arctis Nova 7 headset.
+    TUI for controlling a SteelSeries headset.
+
+    Detects the connected device at startup and only builds controls
+    for capabilities the device supports.
     """
 
     def __init__(self):
         self._last_state = None
+        self._device_name, self._product_id, self._capabilities = detect_device()
         self._build_ui()
+
+    def _has_cap(self, cap):
+        """
+        Check whether the connected device supports the given capability.
+        """
+        return cap in self._capabilities
 
     def _build_ui(self):
         """
@@ -547,155 +589,215 @@ class HeadsetTUI:
         All controls are placed in a single flat ListBox so that
         up/down/j/k navigation moves naturally between every control.
         Section headers are non-selectable Text widgets.
+        Only controls supported by the detected device are included.
         """
         # Status bar
-        self._status_device = urwid.Text(('heading', 'Arctis Nova 7'))
+        self._status_device = urwid.Text(('heading', self._device_name))
         self._status_battery = urwid.Text(('default', 'Battery: --'))
-        self._status_chatmix = urwid.Text(('default', 'Chatmix: --'))
+        self._status_chatmix = None
         self._status_disconnected = urwid.Text(('disconnected', ''))
-        status_bar = urwid.Columns(
-            [
-                (urwid.PACK, self._status_device),
-                (urwid.GIVEN, 2, urwid.Text('')),
-                (urwid.PACK, self._status_battery),
-                (urwid.GIVEN, 2, urwid.Text('')),
-                (urwid.PACK, self._status_chatmix),
-                (urwid.GIVEN, 2, urwid.Text('')),
-                (urwid.PACK, self._status_disconnected),
-            ]
-        )
+        status_cols = [
+            (urwid.PACK, self._status_device),
+            (urwid.GIVEN, 2, urwid.Text('')),
+            (urwid.PACK, self._status_battery),
+            (urwid.GIVEN, 2, urwid.Text('')),
+        ]
+        if self._has_cap('CAP_CHATMIX'):
+            self._status_chatmix = urwid.Text(('default', 'Chatmix: --'))
+            status_cols.append((urwid.PACK, self._status_chatmix))
+            status_cols.append((urwid.GIVEN, 2, urwid.Text('')))
+        status_cols.append((urwid.PACK, self._status_disconnected))
+        status_bar = urwid.Columns(status_cols)
 
         # Audio controls
         def pct128(v):
             return f'{round(v / 128 * 100)}%'
 
-        self._sidetone = NumericControl(
-            'Sidetone',
-            0,
-            128,
-            8,
-            0,
-            'sidetone',
-            display_fmt=pct128,
-        )
-        urwid.connect_signal(self._sidetone, 'changed', self._on_control_changed)
+        # Devices with stepped sidetone (0-3: off/low/med/high)
+        _STEPPED_SIDETONE_DEVICES = {'0x12e0'}  # Arctis Nova Pro Wireless
+
+        self._sidetone = None
+        if self._has_cap('CAP_SIDETONE'):
+            if self._product_id in _STEPPED_SIDETONE_DEVICES:
+                self._sidetone = OptionControl(
+                    'Sidetone',
+                    [(0, 'Off'), (1, 'Low'), (2, 'Med'), (3, 'High')],
+                    initial=0,
+                    control_id='sidetone',
+                )
+            else:
+                self._sidetone = NumericControl(
+                    'Sidetone',
+                    0,
+                    128,
+                    8,
+                    0,
+                    'sidetone',
+                    display_fmt=pct128,
+                )
+            urwid.connect_signal(self._sidetone, 'changed', self._on_control_changed)
+
+        # Lights control
+        self._lights = None
+        if self._has_cap('CAP_LIGHTS'):
+            self._lights = ToggleControl(
+                'Lights',
+                initial=True,
+                control_id='lights',
+            )
+            urwid.connect_signal(self._lights, 'changed', self._on_toggle_changed)
 
         # Equaliser controls
-        self._preset_selector = PresetSelector(initial=0)
-        urwid.connect_signal(self._preset_selector, 'changed', self._on_preset_changed)
-
+        self._has_eq = self._has_cap('CAP_EQUALIZER') or self._has_cap(
+            'CAP_EQUALIZER_PRESET'
+        )
+        self._preset_selector = None
         self._eq_bands = []
-        for i, freq_label in enumerate(EQ_BAND_LABELS):
-            band = EqBandControl(i, freq_label, initial=0.0)
-            self._eq_bands.append(band)
-
-        self._apply_btn = ApplyButton('Apply Custom EQ')
-        urwid.connect_signal(self._apply_btn, 'click', self._on_apply_eq)
+        self._apply_btn = None
+        if self._has_eq:
+            self._preset_selector = PresetSelector(initial=0)
+            urwid.connect_signal(
+                self._preset_selector, 'changed', self._on_preset_changed
+            )
+            for i, freq_label in enumerate(EQ_BAND_LABELS):
+                band = EqBandControl(i, freq_label, initial=0.0)
+                self._eq_bands.append(band)
+            self._apply_btn = ApplyButton('Apply Custom EQ')
+            urwid.connect_signal(self._apply_btn, 'click', self._on_apply_eq)
 
         # Microphone controls
-        self._mic_vol = NumericControl(
-            'Volume',
-            0,
-            128,
-            8,
-            128,
-            'mic-vol',
-            display_fmt=pct128,
-        )
-        self._mic_led = OptionControl(
-            'Mute LED Brightness',
-            [(0, 'Off'), (1, 'Low'), (2, 'Med'), (3, 'High')],
-            initial=3,
-            control_id='mic-led',
-        )
-        urwid.connect_signal(self._mic_vol, 'changed', self._on_control_changed)
-        urwid.connect_signal(self._mic_led, 'changed', self._on_control_changed)
+        self._mic_vol = None
+        if self._has_cap('CAP_MICROPHONE_VOLUME'):
+            self._mic_vol = NumericControl(
+                'Volume',
+                0,
+                128,
+                8,
+                128,
+                'mic-vol',
+                display_fmt=pct128,
+            )
+            urwid.connect_signal(self._mic_vol, 'changed', self._on_control_changed)
+
+        self._mic_led = None
+        if self._has_cap('CAP_MICROPHONE_MUTE_LED_BRIGHTNESS'):
+            self._mic_led = OptionControl(
+                'Mute LED Brightness',
+                [(0, 'Off'), (1, 'Low'), (2, 'Med'), (3, 'High')],
+                initial=3,
+                control_id='mic-led',
+            )
+            urwid.connect_signal(self._mic_led, 'changed', self._on_control_changed)
 
         # Settings controls
-        self._inactive = NumericControl(
-            'Inactive Time (min)',
-            0,
-            90,
-            5,
-            30,
-            'inactive',
-        )
-        self._bt_call_vol = OptionControl(
-            'BT Call Ducking',
-            [(0, 'Off'), (1, 'Medium'), (2, 'Max')],
-            initial=0,
-            control_id='bt-call-vol',
-        )
-        self._vol_limiter = ToggleControl(
-            'Volume Limiter',
-            initial=True,
-            control_id='volume-limiter',
-        )
-        self._bt_powered = ToggleControl(
-            'BT When Powered On',
-            initial=False,
-            control_id='bt-powered-on',
-        )
-        urwid.connect_signal(self._inactive, 'changed', self._on_control_changed)
-        urwid.connect_signal(self._bt_call_vol, 'changed', self._on_control_changed)
-        urwid.connect_signal(self._vol_limiter, 'changed', self._on_toggle_changed)
-        urwid.connect_signal(self._bt_powered, 'changed', self._on_toggle_changed)
+        self._inactive = None
+        if self._has_cap('CAP_INACTIVE_TIME'):
+            self._inactive = NumericControl(
+                'Inactive Time (min)',
+                0,
+                90,
+                5,
+                30,
+                'inactive',
+            )
+            urwid.connect_signal(self._inactive, 'changed', self._on_control_changed)
+
+        self._bt_call_vol = None
+        if self._has_cap('CAP_BT_CALL_VOLUME'):
+            self._bt_call_vol = OptionControl(
+                'BT Call Ducking',
+                [(0, 'Off'), (1, 'Medium'), (2, 'Max')],
+                initial=0,
+                control_id='bt-call-vol',
+            )
+            urwid.connect_signal(self._bt_call_vol, 'changed', self._on_control_changed)
+
+        self._vol_limiter = None
+        if self._has_cap('CAP_VOLUME_LIMITER'):
+            self._vol_limiter = ToggleControl(
+                'Volume Limiter',
+                initial=True,
+                control_id='volume-limiter',
+            )
+            urwid.connect_signal(self._vol_limiter, 'changed', self._on_toggle_changed)
+
+        self._bt_powered = None
+        if self._has_cap('CAP_BT_WHEN_POWERED_ON'):
+            self._bt_powered = ToggleControl(
+                'BT When Powered On',
+                initial=False,
+                control_id='bt-powered-on',
+            )
+            urwid.connect_signal(self._bt_powered, 'changed', self._on_toggle_changed)
 
         # Feedback line
         self._feedback = urwid.Text(('feedback', ''))
 
-        # Help line
-        help_text = urwid.Text(
-            [
-                ('heading', 'q'),
-                ('default', ' Quit | '),
-                ('heading', 'j/k/↑/↓'),
-                ('default', ' Navigate | '),
-                ('heading', 'h/l/←/→'),
-                ('default', ' Adjust | '),
-                ('heading', 'e'),
-                ('default', ' Equaliser | '),
-                ('heading', '1-4'),
-                ('default', ' Preset | '),
-                ('heading', 'a'),
-                ('default', ' Apply EQ'),
-            ]
-        )
-
-        # Build flat list: section headers (non-selectable) + controls (selectable)
-        def section_header(title):
-            return urwid.Text(('heading', f'── {title} ──'))
-
-        self._eq_collapsed = True
-        self._eq_header = urwid.Text(('heading', '── Equaliser [e to expand] ──'))
-        self._eq_widgets = [
-            self._preset_selector,
-            *self._eq_bands,
-            self._apply_btn,
+        # Help line — built dynamically based on available controls
+        help_parts: list[str | tuple[Hashable, str]] = [
+            ('heading', 'q'),
+            ('default', ' Quit | '),
+            ('heading', 'j/k/\u2191/\u2193'),
+            ('default', ' Navigate | '),
+            ('heading', 'h/l/\u2190/\u2192'),
+            ('default', ' Adjust'),
         ]
+        if self._has_eq:
+            help_parts.extend(
+                [
+                    ('default', ' | '),
+                    ('heading', 'e'),
+                    ('default', ' Equaliser | '),
+                    ('heading', '1-4'),
+                    ('default', ' Preset | '),
+                    ('heading', 'a'),
+                    ('default', ' Apply EQ'),
+                ]
+            )
+        help_text = urwid.Text(help_parts)
 
+        # Build flat list of body items based on detected capabilities
         D = urwid.Divider
-        self._build_body_items = lambda: [
-            urwid.Text(
-                ('dim', 'Settings below cannot be read from device — defaults shown')
-            ),
-            D(),
+
+        # Collect all optional controls with dividers between them
+        controls = []
+        for ctrl in [
             self._sidetone,
-            D(),
+            self._lights,
             self._mic_vol,
-            D(),
             self._mic_led,
-            D(),
             self._inactive,
-            D(),
             self._bt_call_vol,
-            D(),
             self._vol_limiter,
-            D(),
             self._bt_powered,
-            D(),
-            self._eq_header,
-            *([] if self._eq_collapsed else self._eq_widgets),
+        ]:
+            if ctrl is not None:
+                if controls:
+                    controls.append(D())
+                controls.append(ctrl)
+
+        # Equaliser section
+        self._eq_collapsed = True
+        self._eq_header = None
+        self._eq_widgets = []
+        if self._has_eq:
+            self._eq_header = urwid.Text(
+                ('heading', '\u2500\u2500 Equaliser [e to expand] \u2500\u2500')
+            )
+            self._eq_widgets = [
+                self._preset_selector,
+                *self._eq_bands,
+                self._apply_btn,
+            ]
+
+        self._build_body_items = lambda: [
+            *controls,
+            *(
+                [D(), self._eq_header]
+                + ([] if self._eq_collapsed else self._eq_widgets)
+                if self._has_eq
+                else []
+            ),
         ]
 
         self._walker = urwid.SimpleFocusListWalker(self._build_body_items())
@@ -759,6 +861,7 @@ class HeadsetTUI:
         self._apply_setting(['-e', eq_str], f'custom EQ = {eq_str}')
 
     _TOGGLE_ARGS = {
+        'lights': ('-l', 'lights'),
         'volume-limiter': ('--volume-limiter', 'volume limiter'),
         'bt-powered-on': ('--bt-when-powered-on', 'BT when powered on'),
     }
@@ -775,7 +878,8 @@ class HeadsetTUI:
 
         Reschedules itself every second.
         """
-        state = read_device_state()
+        has_chatmix = self._has_cap('CAP_CHATMIX')
+        state = read_device_state(has_chatmix=has_chatmix)
         # Extract comparable values to avoid redundant redraws
         if state is None:
             new_state = (False, -1, 64)
@@ -790,7 +894,8 @@ class HeadsetTUI:
         connected, level, chatmix = new_state
         if not connected:
             self._status_battery.set_text(('default', 'Battery: --'))
-            self._status_chatmix.set_text(('default', 'Chatmix: --'))
+            if self._status_chatmix is not None:
+                self._status_chatmix.set_text(('default', 'Chatmix: --'))
             self._status_disconnected.set_text(('disconnected', 'DISCONNECTED'))
         else:
             self._status_disconnected.set_text(('default', ''))
@@ -800,15 +905,16 @@ class HeadsetTUI:
                 icon = battery_icon(level)
                 attr = battery_colour_attr(level)
                 self._status_battery.set_text((attr, f'{icon} Battery: {level}%'))
-            if chatmix < 64:
-                bias = 'Game'
-            elif chatmix > 64:
-                bias = 'Chat'
-            else:
-                bias = 'Centre'
-            self._status_chatmix.set_text(
-                ('default', f'Chatmix: {chatmix} ({bias})'),
-            )
+            if self._status_chatmix is not None:
+                if chatmix < 64:
+                    bias = 'Game'
+                elif chatmix > 64:
+                    bias = 'Chat'
+                else:
+                    bias = 'Centre'
+                self._status_chatmix.set_text(
+                    ('default', f'Chatmix: {chatmix} ({bias})'),
+                )
         # Schedule next refresh
         if loop is not None:
             loop.set_alarm_in(1, self._refresh_status)
@@ -819,26 +925,33 @@ class HeadsetTUI:
         """
         if key in ('q', 'Q'):
             raise urwid.ExitMainLoop()
-        if key == 'e':
-            self._toggle_eq_section()
-            return True
-        if key == 'a':
-            self._on_apply_eq()
-            return True
-        if key in ('1', '2', '3', '4'):
-            self._preset_selector.select(int(key) - 1)
-            return True
+        if self._has_eq:
+            if key == 'e':
+                self._toggle_eq_section()
+                return True
+            if key == 'a':
+                self._on_apply_eq()
+                return True
+            if key in ('1', '2', '3', '4') and self._preset_selector is not None:
+                self._preset_selector.select(int(key) - 1)
+                return True
         return False
 
     def _toggle_eq_section(self):
         """
         Toggle the equaliser section between collapsed and expanded.
         """
+        if self._eq_header is None:
+            return
         self._eq_collapsed = not self._eq_collapsed
         if self._eq_collapsed:
-            self._eq_header.set_text(('heading', '── Equaliser [e to expand] ──'))
+            self._eq_header.set_text(
+                ('heading', '\u2500\u2500 Equaliser [e to expand] \u2500\u2500')
+            )
         else:
-            self._eq_header.set_text(('heading', '── Equaliser [e to collapse] ──'))
+            self._eq_header.set_text(
+                ('heading', '\u2500\u2500 Equaliser [e to collapse] \u2500\u2500')
+            )
         eq_start = self._walker.index(self._eq_header) + 1
         if self._eq_collapsed:
             del self._walker[eq_start : eq_start + len(self._eq_widgets)]
