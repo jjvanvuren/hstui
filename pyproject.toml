@@ -1,0 +1,11 @@
+[project]
+name = "hstui"
+version = "0.1.0"
+description = "TUI for controlling SteelSeries Arctis Nova 7 headset via headsetcontrol"
+requires-python = ">=3.12"
+dependencies = [
+    "urwid>=2.0.0",
+]
+
+[project.scripts]
+hstui = "hstui:main"
