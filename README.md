@@ -2,7 +2,7 @@
 
 A terminal UI for controlling a SteelSeries Arctis Nova 7 headset via [headsetcontrol](https://github.com/Sapd/HeadsetControl).
 
-Built with [urwid](https://urwid.org/) — uses native terminal colours, no background painting.
+Built with [urwid](https://urwid.org/).
 
 ## Features
 
