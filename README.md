@@ -4,8 +4,6 @@ A terminal UI for controlling a SteelSeries Arctis Nova 7 headset via [headsetco
 
 Built with [urwid](https://urwid.org/) — uses native terminal colours, no background painting.
 
-![screenshot](screenshot.png)
-
 ## Features
 
 - Sidetone and microphone volume control
