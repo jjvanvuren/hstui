@@ -1,16 +1,25 @@
 # hstui
 
-A terminal UI for controlling a SteelSeries Arctis Nova 7 headset via [headsetcontrol](https://github.com/Sapd/HeadsetControl).
+A terminal UI for controlling SteelSeries headsets via [headsetcontrol](https://github.com/Sapd/HeadsetControl).
 
 Built with [urwid](https://urwid.org/).
 
+## Supported devices
+
+- SteelSeries Arctis Nova 7
+- SteelSeries Arctis Nova Pro Wireless
+
+The TUI detects the connected device at startup and only shows controls it supports.
+
 ## Features
 
-- Sidetone and microphone volume control
+- Sidetone control (numeric slider or stepped, depending on device)
 - 10-band equaliser with presets (Flat, Bass, Focus, Smiley)
-- Mute LED brightness, inactive timeout, volume limiter
-- Bluetooth call ducking and power-on behaviour
-- Live battery level and chatmix display (1-second refresh)
+- Lights toggle (Nova Pro Wireless)
+- Microphone volume and mute LED brightness (Nova 7)
+- Inactive timeout, volume limiter (Nova 7)
+- Bluetooth call ducking and power-on behaviour (Nova 7)
+- Live battery level and chatmix display (Nova 7)
 - Fully keyboard-driven with vim-style navigation
 
 ## Installation
