@@ -43,23 +43,19 @@ EQ_PRESET_VALUES = {
     3: [3.0, 3.5, 1.5, -1.5, -4.0, -4.0, -2.5, 1.5, 3.0, 4.0],
 }
 
+# Known product IDs
+PID_ARCTIS_NOVA_7 = '0x12ad'
+PID_ARCTIS_NOVA_PRO_WIRELESS = '0x12e0'
+
 # Device-specific software presets (sent via -e, not -p)
-DEVICE_EQ_PRESETS: dict[str, dict[int, str]] = {
-    '0x12ad': {  # Arctis Nova 7
-        4: 'Rtings',
+# Each entry maps preset index to (name, band_values).
+DEVICE_EQ_PRESETS: dict[str, dict[int, tuple[str, list[float]]]] = {
+    PID_ARCTIS_NOVA_7: {
+        4: ('Rtings', [-2.6, -1.3, -6.1, 3.1, 3.4, -0.6, 1.1, 3.4, -8.7, -2.4]),
     },
-    '0x12e0': {  # Arctis Nova Pro Wireless
-        4: 'oratory1990',
-        5: 'Rtings',
-    },
-}
-DEVICE_EQ_PRESET_VALUES: dict[str, dict[int, list[float]]] = {
-    '0x12ad': {
-        4: [-2.6, -1.3, -6.1, 3.1, 3.4, -0.6, 1.1, 3.4, -8.7, -2.4],
-    },
-    '0x12e0': {
-        4: [2.9, 0.9, -5.3, -1.2, 2.4, -1.2, 0.7, 2.2, 0.1, -0.2],
-        5: [0.5, 2.3, -3.8, 1.4, 4.0, -1.8, -1.7, 5.7, -6.9, -7.0],
+    PID_ARCTIS_NOVA_PRO_WIRELESS: {
+        4: ('oratory1990', [2.9, 0.9, -5.3, -1.2, 2.4, -1.2, 0.7, 2.2, 0.1, -0.2]),
+        5: ('Rtings', [0.5, 2.3, -3.8, 1.4, 4.0, -1.8, -1.7, 5.7, -6.9, -7.0]),
     },
 }
 
@@ -555,6 +551,40 @@ class PresetSelector(BaseControl):
         return key
 
 
+class EqHeader(urwid.WidgetWrap):
+    """
+    Equaliser section header.
+
+    Selectable only when collapsed — triggers auto-expand via on_focus
+    callback when it receives focus. Non-selectable when expanded so
+    navigation skips straight past it.
+    """
+
+    def __init__(self, text, on_focus=None):
+        self._text_w = urwid.Text(text)
+        self._on_focus = on_focus
+        self._last_focus: bool | None = None
+        self._selectable = True
+        super().__init__(self._text_w)
+        # Override WidgetWrap.keypress to never consume keys
+        self.keypress = lambda size, key: key  # type: ignore[method-assign]
+
+    def selectable(self):
+        return self._selectable
+
+    def set_selectable(self, selectable):
+        self._selectable = selectable
+
+    def set_text(self, text):
+        self._text_w.set_text(text)
+
+    def render(self, size, focus=False):
+        if focus and focus != self._last_focus and self._on_focus is not None:
+            self._on_focus()
+        self._last_focus = focus
+        return super().render(size, focus)
+
+
 class ApplyButton(BaseControl):
     """
     A simple button widget for applying custom EQ.
@@ -600,6 +630,7 @@ class HeadsetTUI:
 
     def __init__(self):
         self._last_state = None
+        self._loop = None
         self._device_name, self._product_id, self._capabilities = detect_device()
         self._build_ui()
 
@@ -641,7 +672,7 @@ class HeadsetTUI:
             return f'{round(v / 128 * 100)}%'
 
         # Devices with stepped sidetone (0-3: off/low/med/high)
-        _STEPPED_SIDETONE_DEVICES = {'0x12e0'}  # Arctis Nova Pro Wireless
+        _STEPPED_SIDETONE_DEVICES = {PID_ARCTIS_NOVA_PRO_WIRELESS}
 
         self._sidetone = None
         if self._has_cap('CAP_SIDETONE'):
@@ -686,10 +717,11 @@ class HeadsetTUI:
         if self._has_eq:
             self._all_presets = dict(EQ_PRESETS)
             self._all_preset_values = dict(EQ_PRESET_VALUES)
-            device_presets = DEVICE_EQ_PRESETS.get(self._product_id, {})
-            device_values = DEVICE_EQ_PRESET_VALUES.get(self._product_id, {})
-            self._all_presets.update(device_presets)
-            self._all_preset_values.update(device_values)
+            for idx, (name, values) in DEVICE_EQ_PRESETS.get(
+                self._product_id, {}
+            ).items():
+                self._all_presets[idx] = name
+                self._all_preset_values[idx] = values
             self._preset_selector = PresetSelector(presets=self._all_presets, initial=0)
             urwid.connect_signal(
                 self._preset_selector, 'changed', self._on_preset_changed
@@ -817,8 +849,9 @@ class HeadsetTUI:
         self._eq_header = None
         self._eq_widgets = []
         if self._has_eq:
-            self._eq_header = urwid.Text(
-                ('heading', '\u2500\u2500 Equaliser [e to expand] \u2500\u2500')
+            self._eq_header = EqHeader(
+                ('heading', '\u2500\u2500 Equaliser [e to expand] \u2500\u2500'),
+                on_focus=self._on_eq_header_focus,
             )
             self._eq_widgets = [
                 self._preset_selector,
@@ -988,27 +1021,76 @@ class HeadsetTUI:
                 return True
         return False
 
+    def _on_eq_header_focus(self):
+        """
+        Called when the EQ header receives focus.
+
+        Defers expansion to after the current render completes,
+        since modifying the walker mid-render causes urwid errors.
+        Moves focus into the first EQ control after expanding.
+        """
+        if self._eq_collapsed and self._loop is not None:
+
+            def _expand_and_focus(_loop, _data):
+                self._expand_eq_section()
+                if self._eq_widgets:
+                    eq_start = self._walker.index(self._eq_header) + 1
+                    self._walker.set_focus(eq_start)
+
+            self._loop.set_alarm_in(0, _expand_and_focus)
+
+    def _expand_eq_section(self):
+        """
+        Expand the equaliser section (no-op if already expanded).
+        """
+        if self._eq_header is None or not self._eq_collapsed:
+            return
+        self._eq_collapsed = False
+        self._eq_header.set_selectable(False)
+        self._eq_header.set_text(
+            ('heading', '\u2500\u2500 Equaliser [e to collapse] \u2500\u2500')
+        )
+        eq_start = self._walker.index(self._eq_header) + 1
+        for i, w in enumerate(self._eq_widgets):
+            self._walker.insert(eq_start + i, w)
+
+    def _collapse_eq_section(self):
+        """
+        Collapse the equaliser section (no-op if already collapsed).
+        """
+        if self._eq_header is None or self._eq_collapsed:
+            return
+        self._eq_collapsed = True
+        self._eq_header.set_selectable(True)
+        self._eq_header.set_text(
+            ('heading', '\u2500\u2500 Equaliser [e to expand] \u2500\u2500')
+        )
+        eq_start = self._walker.index(self._eq_header) + 1
+        del self._walker[eq_start : eq_start + len(self._eq_widgets)]
+
     def _toggle_eq_section(self):
         """
         Toggle the equaliser section between collapsed and expanded.
+
+        Moves focus to the EQ header when collapsing, or to the first
+        EQ control (preset selector) when expanding.
         """
         if self._eq_header is None:
             return
-        self._eq_collapsed = not self._eq_collapsed
         if self._eq_collapsed:
-            self._eq_header.set_text(
-                ('heading', '\u2500\u2500 Equaliser [e to expand] \u2500\u2500')
-            )
+            self._expand_eq_section()
+            # Move focus to the first EQ control
+            if self._eq_widgets:
+                eq_start = self._walker.index(self._eq_header) + 1
+                self._walker.set_focus(eq_start)
         else:
-            self._eq_header.set_text(
-                ('heading', '\u2500\u2500 Equaliser [e to collapse] \u2500\u2500')
-            )
-        eq_start = self._walker.index(self._eq_header) + 1
-        if self._eq_collapsed:
-            del self._walker[eq_start : eq_start + len(self._eq_widgets)]
-        else:
-            for i, w in enumerate(self._eq_widgets):
-                self._walker.insert(eq_start + i, w)
+            self._collapse_eq_section()
+            # Move focus to the nearest selectable control before the EQ header
+            header_idx = self._walker.index(self._eq_header)
+            idx = header_idx - 1
+            while idx > 0 and not self._walker[idx].selectable():
+                idx -= 1
+            self._walker.set_focus(idx)
 
     def run(self):
         """
