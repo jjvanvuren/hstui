@@ -2,7 +2,7 @@
 TUI application for controlling SteelSeries headsets.
 
 Supported devices:
-- Arctis Nova 7 (0x12ad)
+- Arctis Nova 7 (0x2202)
 - Arctis Nova Pro Wireless (0x12e0)
 
 Uses headsetcontrol CLI tool for communication with the device.
@@ -44,7 +44,7 @@ EQ_PRESET_VALUES = {
 }
 
 # Known product IDs
-PID_ARCTIS_NOVA_7 = '0x12ad'
+PID_ARCTIS_NOVA_7 = '0x2202'
 PID_ARCTIS_NOVA_PRO_WIRELESS = '0x12e0'
 
 # Device-specific software presets (sent via -e, not -p)
